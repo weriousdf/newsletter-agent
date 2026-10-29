@@ -37,12 +37,21 @@ INIT = {"hours": 24, "collected": [], "picked": [], "drafted": [],
 
 # ── ① collect ────────────────────────────────────────────────────────
 SOURCES = [
-    ("OpenAI",     "https://openai.com/blog/rss.xml"),
-    ("DeepMind",   "https://deepmind.google/blog/rss.xml"),
-    ("TechCrunch", "https://techcrunch.com/category/artificial-intelligence/feed/"),
-    ("The Verge",  "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml"),
-    ("AI타임스",    "https://www.aitimes.com/rss/allArticle.xml"),
+    ("Seen and Heard",     "https://seenandheard-international.com/feed/"),
+    ("NY Classical Review", "https://newyorkclassicalreview.com/feed/"),
+    ("SF Classical Voice", "https://www.sfcv.org/rss.xml"),
+    ("Guardian Classical", "https://www.theguardian.com/music/classicalmusicandopera/rss"),
+    ("I Care If You Listen", "https://icareifyoulisten.com/feed/"),
+    ("Pizzicato",          "https://www.pizzicato.lu/feed/"),
+    ("Slipped Disc",       "https://slippedisc.com/feed/"),
+    ("연합뉴스 문화",         "https://www.yna.co.kr/rss/culture.xml"),
 ]
+
+# 문화 전반을 다루는 소스는 클래식 키워드가 제목·요약에 있는 글만 남긴다
+KEYWORD_FILTER = {
+    "연합뉴스 문화": ["피아니스트", "오케스트라", "협연", "지휘자", "교향악", "필하모닉",
+                  "리사이틀", "첼리스트", "바이올리니스트", "성악가", "임윤찬", "조성진"],
+}
 
 def strip_tags(s):
     return re.sub(r"<[^>]+>", "", s or "").strip()
@@ -64,6 +73,10 @@ def collect(s: dict) -> dict:                   # ① 자료 수집
             at = published_at(e)
             if not at or at < cutoff:           # time window 밖이거나 날짜가 없으면 버린다
                 continue
+            if name in KEYWORD_FILTER:                  # 클래식과 무관한 글은 버린다
+                text = e.get("title", "") + " " + strip_tags(e.get("summary", ""))
+                if not any(k in text for k in KEYWORD_FILTER[name]):
+                    continue
             key = e.link.split("?")[0].rstrip("/")       # 추적용 꼬리표를 떼고 비교
             if key in seen:
                 continue
@@ -84,10 +97,13 @@ class Shortlist(BaseModel):
     picks: list[Pick]
 
 BATCH, TARGET = 40, 5          # 예선 묶음 크기, 최종 발행 건수
-CRITERIA = ("독자는 AI를 실제 제품에 붙이는 국내 개발팀입니다.\n"
-            "- 이번 주 일하는 방식이 바뀔 만한가\n"
-            "- 지금 쓰는 도구·API의 가격·한도·정책이 실제로 변했나\n"
-            "버릴 것: 발표 예정·로드맵만 있는 것, MOU·투자유치·수상 같은 홍보성 소식")
+CRITERIA = ("독자는 클래식 공연을 직접 보러 가는 국내 클래식 팬입니다.\n"
+            "우선순위는 다음과 같습니다.\n"
+            "1. 피아니스트 임윤찬·조성진(Yunchan Lim, Seong-Jin Cho)의 공연 일정·음반·활동 소식\n"
+            "2. 오케스트라 협연, 내한 공연, 시즌 프로그램 등 앞으로 볼 수 있는 공연 소식\n"
+            "3. 클래식 업계의 주요 동향(콩쿠르, 음반, 단체·인사 소식)\n"
+            "버릴 것: 이미 끝난 공연의 단순 후기, 클래식과 무관한 문화 소식, 광고성 소식,\n"
+            "지자체·학교·수목원 등 지역 소규모 행사, 연주자의 사건·사고·가십")
 
 def ask_picks(items, n):
     listing = "\n".join(f"{i}. [{it['source']}] {it['title']}" for i, it in enumerate(items))
@@ -114,10 +130,11 @@ def select(s: dict) -> dict:                   # ② 중요도 선별
 class Draft(BaseModel):        # 22장에서 정한 세 칸
     headline: str = Field(description="20자 내외의 한국어 헤드라인")
     summary:  str = Field(description="세 문장 요약. ~합니다체, 과장 없이 건조하게")
-    why:      str = Field(description="국내 개발팀에게 왜 중요한지 한 문장")
+    why:      str = Field(description="클래식 공연을 보러 가는 국내 팬에게 왜 중요한지 한 문장")
 
-SYS = ("당신은 국내 개발팀을 위한 AI 뉴스레터 기자입니다.\n"
-       "아래 기사 본문을 읽고 헤드라인·요약·왜 중요한지를 쓰세요.\n"
+SYS = ("당신은 국내 클래식 팬을 위한 뉴스레터 기자입니다.\n"
+       "아래 기사 본문(영어·독일어·한국어일 수 있음)을 읽고 헤드라인·요약·왜 중요한지를 한국어로 쓰세요.\n"
+       "공연 날짜·장소·연주자·곡목이 본문에 있으면 요약에 정확히 넣고, 본문에 없는 정보는 절대 지어내지 마세요.\n"
        "'주목된다·기대를 모은다' 같은 기자체 표현은 쓰지 마세요.")
 
 class ReportIn(TypedDict):                     # 워커가 받는 것은 기사 하나뿐
@@ -181,7 +198,7 @@ def build_embeds(run_id, lead, articles):
     if not articles:                                   # 조용한 날에도 한 장은 보낸다
         return [{"title": f"🗞️ {run_id}", "color": DEFAULT,
                  "description": "오늘은 조용합니다."}]
-    embeds = [{"title": f"🗞️ {run_id} · AI 브리핑", "description": lead, "color": DEFAULT}]
+    embeds = [{"title": f"🎹 {run_id} · 클래식 브리핑", "description": lead, "color": DEFAULT}]
     for i, a in enumerate(articles, 1):
         desc = a["summary"]
         if a.get("why"):
