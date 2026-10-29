@@ -116,15 +116,36 @@ def ask_picks(items, n):
         response_format=Shortlist).choices[0].message.parsed
     return [p for p in out.picks if 0 <= p.index < len(items)]      # 없는 번호는 버린다
 
+# 이 이름이 제목·요약에 있으면 예선·본선을 건너뛰고 맨 앞에 넣는다(코드로 강제)
+PIN_KEYS = ["임윤찬", "조성진", "yunchan lim", "lim yunchan", "seong-jin cho", "seong jin cho",
+            "cho seong-jin", "cho seong jin"]
+
+def is_pinned(it):
+    text = (it["title"] + " " + it["summary"]).lower()
+    return any(k in text for k in PIN_KEYS)
+
 def select(s: dict) -> dict:                   # ② 중요도 선별
     items = s["collected"]
-    survivors = []
-    for i in range(0, len(items), BATCH):       # 예선 — 묶음마다 여덟 건
-        chunk = items[i:i + BATCH]
-        survivors += [chunk[p.index] for p in ask_picks(chunk, 8)]
-    finals = ask_picks(survivors, TARGET)       # 본선 — 한 화면에 놓고 다섯 건
-    return {"picked": [survivors[p.index] for p in finals],
-            "log": [f"② 선별   {len(items)} → 예선 {len(survivors)} → {len(finals)}건"]}
+    pinned = [it for it in items if is_pinned(it)]
+    rest = [it for it in items if not is_pinned(it)]
+    top, seen_event = [], set()
+    if pinned:                                  # 고정 기사끼리는 순위만 매기고, 같은 사건은 한 건만
+        for p in ask_picks(pinned, min(len(pinned), TARGET * 2)):
+            if p.event in seen_event:
+                continue
+            seen_event.add(p.event)
+            top.append(pinned[p.index])
+        top = top[:TARGET]
+    need = TARGET - len(top)
+    survivors, extra = [], []
+    if need > 0 and rest:
+        for i in range(0, len(rest), BATCH):    # 예선 — 묶음마다 여덟 건
+            chunk = rest[i:i + BATCH]
+            survivors += [chunk[p.index] for p in ask_picks(chunk, 8)]
+        finals = ask_picks(survivors, need)     # 본선 — 한 화면에 놓고 남은 자리만큼
+        extra = [survivors[p.index] for p in finals]
+    return {"picked": top + extra,
+            "log": [f"② 선별   {len(items)} → 고정 {len(top)} + 예선 {len(survivors)} → {len(top) + len(extra)}건"]}
 
 # ── ③ report ─────────────────────────────────────────────────────────
 class Draft(BaseModel):        # 22장에서 정한 세 칸
